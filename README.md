@@ -47,7 +47,7 @@ sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc0010015); ENABLED=$(printf "%x" $((0x
 ## (RoadMap) Materials
 This repository contains the following materials, which are step-by-step to reproduce the results in the paper.
 All folders should be self-commented.
-Even though we try our best to avoid freezing your system, but I'm pretty sure you will probably encounter crashes somehow.
+Even though we try our best to avoid freezing your system, I'm pretty sure you will probably encounter crashes somehow.
 So make sure you are able to reboot your machine before testing it ;)
 
 #### Without VM
