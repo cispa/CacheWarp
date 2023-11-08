@@ -53,15 +53,17 @@ So make sure you are able to reboot your machine before testing it ;)
 #### Without VM
 1. `l2-l3-prime`: Builds eviction set for L2/L3 cache sets.
 2. `timing-after-(wb)invd`: Analyse the scope of `WBINVD` and `INVD`.
+3. `timing-with-dirty-cls`: We observe a clear linear relationship between the number of
+dirty cache lines and the timing of the instruction.
    
 #### With VM
-3. `kernel-patch`: We incorporate our own interrupt framework to KVM on Linux 6.1.0, which provides reliable single-stepping.
-4. `userspace-controller`: The code to interact with our interrupt framework.
-5. `toy-examples`: Toy-examples we used to illustrate the attacking primitives, DropForge and Timewarp.
-6. `rsa-crt`: Blindly drop (without single-stepping) to break rsa-crt implementation.
-7. `openssh`: Bypass openssh authentication via TimeWarp.
-8. `sudo`: Bypass sudo authentication via DropForge.
-9. `sw-mitigation`:
+4. `kernel-patch`: We incorporate our own interrupt framework to KVM on Linux 6.1.0, which provides reliable single-stepping.
+5. `userspace-controller`: The code to interact with our interrupt framework.
+6. `toy-examples`: Toy-examples we used to illustrate the attacking primitives, DropForge and Timewarp.
+7. `rsa-crt`: Blindly drop (without single-stepping) to break rsa-crt implementation.
+8. `openssh`: Bypass openssh authentication via TimeWarp.
+9. `sudo`: Bypass sudo authentication via DropForge.
+10. `sw-mitigation`:
 
 
 ## Launch VM
