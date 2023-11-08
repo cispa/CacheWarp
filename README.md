@@ -2,7 +2,7 @@
 This repository contains the experiments of evaluation and case studies discussed in the paper 
 * "CacheWarp: Software-based Fault Injection using Selective State Reset" (USENIX Security'24). 
 
-You can find the paper at the [USENIX website](#TODO). For the demo, please check our [website](cachewarpattack.com)
+You can find the paper at the [USENIX website](#TODO). For the demos, please check our [website](cachewarpattack.com).
 
 ## Overview
 
@@ -12,16 +12,22 @@ It allows the hypervisor to revert data modifications of the VM on a single-stor
 ## Platform
 
 We tested the attack on AMD EPYC 7252 for SEV-ES, AMD EPYC 7313P and 7443 CPUs for SEV-SNP. 
+
 As suggested by AMD, on AMD EPYC 7252, the host OS, QEMU, and OVMF are built with the master branch (Linux kernel 6.1.0, QEMU v7.2.0-2-g5204b499a6, OVMF commit cda98df, firmware 0.24.15). 
+
 For AMD SEV-SNP, we use the snp-latest branch (commit ad91624, firmware 1.54.01). 
 The victim VMs are configured with a single virtual CPU and 4 GB of main memory. 
+
 The victim system is running Ubuntu 20.04 LTS (Linux kernel 5.15.0).
 
 ## Mitigation
 
 AMD has tracked the issue as CVE-2023-20592 and provided a microcode update fixing the vulnerability. For more detailed information, we recommend reading the official [AMD Security Bulletin](https://www.amd.com/en/resources/product-security/bulletin/amd-sb-3005.html).
 
+
 ## `INVD` Instruction
+
+The microcode update is not available for 2nd Gen EPYC so you can still test the `INVD` there (or downgrade on 3rd/4th Gen EPYC).
 
 `INVD` is the same as `WBINVD` unless bit 4 of MSR 0xc0010015 is cleared.
 
@@ -39,10 +45,16 @@ sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc0010015); ENABLED=$(printf "%x" $((0x
 
 
 ## (RoadMap) Materials
-This repository contains the following materials, which are step-by-step to reproduce the results in the paper. All folders should be self-commented.
+This repository contains the following materials, which are step-by-step to reproduce the results in the paper.
+All folders should be self-commented.
+Even though we try our best to avoid freezing your system, but I'm pretty sure you will probably encounter crashes somehow.
+So make sure you are able to reboot your machine before testing it ;)
 
+#### Without VM
 1. `l2-l3-prime`: Builds eviction set for L2/L3 cache sets.
 2. `timing-after-(wb)invd`: Analyse the scope of `WBINVD` and `INVD`.
+   
+#### With VM
 3. `kernel-patch`: We incorporate our own interrupt framework to KVM on Linux 6.1.0, which provides reliable single-stepping.
 4. `userspace-controller`: The code to interact with our interrupt framework.
 5. `toy-examples`: Toy-examples we used to illustrate the attacking primitives, DropForge and Timewarp.
@@ -66,8 +78,8 @@ sudo taskset -c 7 ./launch-qemu.sh -hda focal.qcow2 -cdrom ubuntu-20.04.5-deskto
 As shown in launch script, the vCPU is pinned to core 7.
 You can check the CPU complex (CCX) via `sudo cat /sys/devices/system/cpu/cpu7/cache/index3/shared_cpu_list`
 The l3 cache is shared among the entire CCX. 
-And from the results of `timing-after-(wb)invd`, you will know the `INVD` invalidates all the L3 cache.
-Hence, we then offline other cores within the same CCX to make cache cleaner and avoid crashes.
+And from the results of `timing-after-(wb)invd`, you will know the `INVD` invalidates the entire L3 cache within the CCX.
+Hence, we offline other cores within the same CCX to make cache cleaner and avoid crashes.
 
 If the CCX contains 8 cores on your CPU, just offline other seven cores.
 You can also disable all the prefetch features to reduce noise.
@@ -81,10 +93,11 @@ echo 0 | sudo tee /sys/devices/system/cpu/cpu15/online
 echo 0 | sudo tee /sys/devices/system/cpu/cpu6/online
 
 sudo cpufreq-set -c 7 -g userspace
+# We do not recommend using the maximum frequency (P0) to avoid thermal throttling
 sudo cpufreq-set -c 7 -f 2.40GHz
 
 # Enable INVD
-sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc0010015); ENABLED=$(printf "%x" $((0x$CUR & ~16))); wrmsr -a 0xc0010015 0x$ENABLED'
+sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc0010015); ENABLED=$(printf "%x" $((0x$CUR & ~16))); wrmsr -p 7 0xc0010015 0x$ENABLED'
 
 # Disable all prefetchers (Optional. The MSR bits vary from Processors)
 sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc0011022); ENABLED=$(printf "%x" $((0x$CUR | 40960))); wrmsr -p 7 0xc0011022 0x$ENABLED'
