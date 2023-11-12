@@ -1,6 +1,6 @@
-## Wbinvd timing kernel module
 Measures how long a `WBINVD`/`INVD` instruction takes depending on the nubmer of dirty cache lines.
 
+## WBINVD
 `WBIND` is a safe instruction. So we measure it via [r0e](https://github.com/misc0110/r0e)
 
 ``` bash
@@ -14,6 +14,7 @@ sudo ./wbinvd_bench
 
 See `res.csv` for the results, which show there is a linear dependency between the number of dirty cache lines and the timing of `wbinvd`
 
+## INVD
 For `INVD`, we use our leaky kernel module.
 ``` bash
 # Make sure you insmod leaky kernel module already

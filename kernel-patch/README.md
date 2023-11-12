@@ -9,9 +9,9 @@ In `svm_vcpu_create()`, the malicious hypervisor can easily use huge pages as ev
 
 `intr_interception()` contains the code to interact with the controller in user-space.
 On SEV-ES, the attacker can track the changes of guest register state (by reading the ciphertext of VMSA) for each instruction within each page (by reading the error_info in NPF_handler).
-The attacker can debug locally via e.g., GDB to observe a special sequence to locate the target to drop. 
+The attacker can debug locally via e.g., GDB to observe a special sequence to locate the target to drop. (Why is dynamically debug needed? E.g., `xor esi, esi` does not modify esi if esi was `0`.)
 On SEV-SNP, the register changes is not available anymore. 
-More info please see in the paper.
+Please see the paper for more information.
 
 `npf_interception` contains the code to set APIC timer for the next timer interrupt.
 

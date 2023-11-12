@@ -5,9 +5,6 @@
 #define ISOLATED_CPU_CORE 7 
 #define KERNEL_SYNC_PA 0x1FEE01000
 
-#define INSTR_MONITOR(x) asm volatile("monitorx" : : "a"(x), "c"(0), "d"(0));
-#define INSTR_WAIT asm volatile("mwaitx;" : : "a"(-1), "c"(0));
-
 uint64_t flag, additional_flag = 0;
 void *sev_step_kernel_sync_addr_p;
 
@@ -29,7 +26,7 @@ void* ctrl_thread(void* dummy) {
 	asm volatile ("movq %1, (%0)\n"::"r"(sev_step_kernel_sync_addr_p),"r"(flag):);
 
 	/* Wait until the attack finishes */
-	while (*(uint32_t*)(sev_step_kernel_sync_addr_p)) {}
+	while (*(uint32_t*)(sev_step_kernel_sync_addr_p)) {sched_yield();}
 }
 
 
@@ -147,7 +144,7 @@ int main(int argc, char **argv){
 #define RUNTIME    0
 #define ZS_TLB_FLUSH 1 
 
-  additional_flag = WBINVD + (RUNTIME << 2) + (ZS_TLB_FLUSH << 3);
+  additional_flag = WBNOINVD + (RUNTIME << 2) + (ZS_TLB_FLUSH << 3);
   asm volatile ("movq %1, (%0)\n"::"r"(sev_step_kernel_sync_addr_p+3096),"r"(additional_flag):);
 
   pthread_t p;

@@ -12,7 +12,7 @@ All the parameters are written to a shared page for interaction/guidance.
 
 **UC_VMSA**: Mark VMSA into uncacheable (Note that we currently hardcode using MTRR 0x208/0x209, please check which pair is available on your system).
 
-**INVD**: Invalidate cache after VM breaks (when we find the target).
+**INVD**: Execute `INVD` after VM breaks.
 
 **NO_STEP**: Do not care the stepping is zero step or not (i.e., do not observe VMSA).
 
@@ -23,8 +23,8 @@ All the parameters are written to a shared page for interaction/guidance.
 **INSTR_VERBOSE**: Register change of each non-zero-step.
 
 **VEC_SEQ**: 
-`1` stands for a special sequence of register changes is provided to locate the target.
-`0` stands for blindly drop
+`1`: A special sequence of register changes is provided to locate the target.
+`0`: Blindly drop.
 
 **count**: How many instructions (single-step) needs to be executed after the sequence is matched.
 
@@ -32,12 +32,12 @@ All the parameters are written to a shared page for interaction/guidance.
 
 **OFFSET 2054**: The correct register change of the last instruction before the target instruction.
 
-**OFFSET 2052**: Drop when the pattern is matched `i`th.
+**OFFSET 2052**: Drop when the pattern is matched `i`th times.
 
-**WBNOINVD**: Execute `WBNOINVD` before `VMRUN`
+**WBNOINVD**: Execute `WBNOINVD` before `VMRUN`.
 
-**WBINVD**: Execute `WBINVD` before `VMRUN`
+**WBINVD**: Execute `WBINVD` before `VMRUN`.
 
-**RUNTIME**: Want to know the timing of each stepping
+**RUNTIME**: Want to know the timing of each stepping.
 
 **ZS_TLB_FLUSH**: Clear the present bit of the current guest page (Instruction Fetch) even after a zero-step.

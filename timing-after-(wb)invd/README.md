@@ -1,4 +1,3 @@
-
 Access time for reading data from different hierarchies, as well as the access time after wbinvd.
 Note: CORE 6 and CORE 14 are silbling cores. 
 
