@@ -1,3 +1,12 @@
+``` bash
+# config
+vm> sudo su
+vm> apt update && apt-get -y install vim openssh-server ii.
+# allow password and comment `UsePAM yes`
+vm> vim /etc/ssh/sshd_config
+vm> service ssh restart
+```
+
 Run exp like the demo video.
 
 ```

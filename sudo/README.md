@@ -1,3 +1,10 @@
+``` bash
+# Config
+vm> sudo su
+vm> adduser <new_account>
+vm> su new_account
+```
+
 Run exp like the demo video.
 
 ``` bash
