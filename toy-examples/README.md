@@ -1,5 +1,8 @@
 ## PoCs
 
+Those PoCs use blind drops. 
+While the first one can be run safely, the other two is likely to crash.
+
 ### 1. Drop generic writes
 
 ```bash
@@ -16,6 +19,7 @@ vm> apt update && apt -y install git vim build-essential
 vm> sysctl -w vm.nr_hugepages=1
 
 # First, you need to copy the file generic-writes-drop.c from the initial archive to the VM.
+# -O2 is used so that the loop counter is stored in registers but not on stack
 vm> gcc generic-writes-drop.c -O2 -o generic-writes-drop
 
 # Run
@@ -71,7 +75,8 @@ vm> gcc timewarp.c -o timewarp
 # Run
 vm> ./timewarp
 
-# Change the INTERVAL to a smaller one for single-stepping, e.g., 39. (See paper Table 1)
+# Change the INTERVAL to a smaller one for single-stepping, e.g., 39. Increase `REPEAT` for more chances to drop the `call`
+
 # Run the exploit in another terminal
 hv> sudo ./invd.sh
 

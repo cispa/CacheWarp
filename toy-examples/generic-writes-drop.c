@@ -3,15 +3,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dlfcn.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <asm/mtrr.h>
-#include <sys/ioctl.h>
-#include <sched.h>
-#include <sys/ioctl.h>
-#include <asm/unistd.h>
 #include <assert.h>
 
 int g_pagemap_fd = -1;
@@ -44,7 +38,7 @@ uint64_t add(uint64_t* data) {
   uint64_t ret;
 
   for (int i = 0; i < 10000000; i++)
-  asm volatile (
+    asm volatile (
         ".rept 4000\n"
         "movq (%0), %%r11\n"
         "addq $1, %%r11\n"

@@ -1,7 +1,7 @@
 #!/bin/bash
 INTERVAL=50
-REPEAT=5
-STEP=10
+REPEAT=2
+STEP=2
 
 for i in {0..1023};
 do
@@ -9,7 +9,6 @@ do
 	for j in {1..$REPEAT};
 	do
 		sudo ./blind $INTERVAL $STEP ${i} 0
-        sudo ./blind $INTERVAL $STEP ${i} 1
 	done
 done
 

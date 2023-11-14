@@ -3,6 +3,9 @@ We implement the interrupt framework based on Linux 6.1.0 (commit 6f1f5caed5bfad
 It allows the attacker to interrupt the VM at any attacker-chosen points to exploit the VM.
 The framework privides three abilities to perform the attack, namely reliable single-stepping, when to drop (location), and what to drop (written back unrelated dirty cachelines).
 
+On SEV-SNP, the register changes is not available anymore. 
+Please see the paper for more information.
+
 `kvm_unpre_all()`, `kvm_unpre_gfn`, `kvm_unpre_all_except_gfn` contain the code to clear the present bit of guest pages in the TDP. 
 
 In `svm_vcpu_create()`, the malicious hypervisor can easily use huge pages as eviction buffers. 
