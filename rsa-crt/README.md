@@ -1,5 +1,7 @@
 ## Run
 
+Set `UC_VMSA` to 0 in `cachewarp.c` for blind drops.
+
 ``` bash
 # You will observe a correct signature
 vm> make all 

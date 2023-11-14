@@ -1,7 +1,7 @@
 ## PoCs
 
 Those PoCs use blind drops. 
-While the first one can be run safely, the other two is likely to crash.
+While the first one can be run safely, the other two could lead to crash sometimes.
 
 ### 1. Drop generic writes
 
@@ -50,6 +50,8 @@ result: 39999998815 (similar, i.e., not 40000000000)
 
 ### 2. Drop stack memory
 
+Set `UC_VMSA` to 0 in `cachewarp.c` for blind drops.
+
 ```bash
 vm> gcc math.c -o math
 
@@ -66,6 +68,8 @@ hv> sudo ./invd.sh
 
 
 ### 3. Reuse return value 
+
+Set `UC_VMSA` to 0 in `cachewarp.c` for blind drops.
 
 (Drop return address of the `call` instruction) 
 
