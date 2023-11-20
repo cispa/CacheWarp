@@ -577,7 +577,7 @@ index ce362e88a567..9cfe67afde29 100644
 +						((last_vmsa_cs != cs) << 12) 		   + ((last_vmsa_ss != ss) << 13);
 +					
 +					last_vmsa_rsp = rsp;
-+					last_vmsa_rbp = rbp
++					last_vmsa_rbp = rbp;
 +					last_vmsa_rax = rax;
 +					last_vmsa_rcx = rcx;
 +					last_vmsa_rdx_rbx = rdx_rbx;
