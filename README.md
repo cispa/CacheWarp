@@ -2,7 +2,7 @@
 This repository contains the experiments of evaluation and case studies discussed in the paper 
 * "CacheWarp: Software-based Fault Injection using Selective State Reset" (USENIX Security'24). 
 
-You can find the paper at the [USENIX website](#TODO). For the demos, please check our [website](cachewarpattack.com).
+You can find the paper at the [USENIX website](https://www.usenix.org/conference/usenixsecurity24/presentation/zhang-ruiyi). For the demos, please check our [website](https://cachewarpattack.com/).
 
 ## Overview
 
@@ -108,7 +108,7 @@ sudo bash -c 'modprobe msr; CUR=$(rdmsr 0xc001102b); ENABLED=$(printf "%x" $((0x
 If there are questions regarding these experiments, please send an email to `ruiyi.zhang (AT) cispa.de` or message `@Rayiizzz` on Twitter.
 
 ## Research Paper
-The paper is available at the [USENIX website](#TODO). 
+The paper is available at the [USENIX website](https://www.usenix.org/conference/usenixsecurity24/presentation/zhang-ruiyi). 
 You can cite our work with the following BibTeX entry:
 ```latex
 @inproceedings{Zhang2023Cachewarp,
