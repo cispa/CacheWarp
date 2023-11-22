@@ -12,8 +12,6 @@ MODULE_AUTHOR("Ruiyi Zhang");
 MODULE_DESCRIPTION("Device to call kernel functions directly from user space");
 MODULE_LICENSE("GPL");
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
-
 static bool device_busy = false;
 
 static void maccess(void *p) { asm volatile("movq (%0), %%rax\n" : : "c"(p) : "rax"); }
