@@ -111,11 +111,11 @@ If there are questions regarding these experiments, please send an email to `rui
 The paper is available at the [USENIX website](https://www.usenix.org/conference/usenixsecurity24/presentation/zhang-ruiyi). 
 You can cite our work with the following BibTeX entry:
 ```latex
-@inproceedings{Zhang2023Cachewarp,
-	title = {{CacheWarp}: Software-based Fault Injection using Selective State Reset},
-	author = {Zhang, Ruiyi and Gerlach, Lukas and Weber, Daniel and Hetterich, Lorenz and L{\"u}, Youheng and Kogler, Andreas and Schwarz, Michael},
-	booktitle = {33rd USENIX Security Symposium (USENIX Security 24)},
-	year = {2024},
+@inproceedings{Zhang2024CacheWarp,
+  year={2024},
+  title={{CacheWarp: Software-based Fault Injection using Selective State Reset}},
+  booktitle={USENIX Security},
+  author={Ruiyi Zhang and Lukas Gerlach and Daniel Weber and Lorenz Hetterich and Youheng Lü and Andreas Kogler and Michael Schwarz}
 }
 
 ```
