@@ -56,7 +56,7 @@ So make sure you are able to reboot your machine before testing it ;)
 3. `timing-with-dirty-cls`: We observe a clear linear relationship between the number of dirty cache lines and the timing of the instruction.
    
 #### With VM
-4. `kernel-patch`: We incorporate our own interrupt framework to KVM on Linux 6.1.0, which provides reliable single-stepping.
+4. `kernel-patch`: We incorporate our own interrupt framework to KVM on Linux 6.1.0 (any version higher than 6.0 should work, as two-dimentional page feature is introduced), which provides reliable single-stepping.
 5. `userspace-controller`: The code to interact with our interrupt framework.
 6. `toy-examples`: Toy-examples we used to illustrate the attacking primitives, DropForge and Timewarp.
 7. `rsa-crt`: Blindly drop (without single-stepping) to break rsa-crt implementation.
