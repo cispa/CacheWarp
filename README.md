@@ -27,7 +27,7 @@ AMD has tracked the issue as CVE-2023-20592 and provided a microcode update fixi
 
 ## `INVD` Instruction
 
-The microcode update is not available for 2nd Gen EPYC so you can still test the `INVD` there (or downgrade on 3rd/4th Gen EPYC).
+The microcode update is not available for 2nd Gen EPYC so you can still test the `INVD` there (or downgrade on 3rd Gen EPYC).
 
 `INVD` is the same as `WBINVD` unless bit 4 of MSR 0xc0010015 is cleared.
 
