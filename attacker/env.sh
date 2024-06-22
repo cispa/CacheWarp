@@ -1,5 +1,7 @@
 #!/bin/bash
 
+#sudo cpufreq-set -c 0 -g powersave
+#sudo cpufreq-set -c 1 -g powersave
 echo 0 | sudo tee /sys/devices/system/cpu/cpu14/online
 echo 0 | sudo tee /sys/devices/system/cpu/cpu15/online
 echo 0 | sudo tee /sys/devices/system/cpu/cpu6/online

